@@ -15,9 +15,11 @@ import narwhals.stable.v1 as nw
 from tests.utils import maybe_get_modin_df
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from narwhals.utils import Version
 
-data = {"a": [1, 2, 3]}
+data: dict[str, Any] = {"a": [1, 2, 3]}
 
 df_pd = pd.DataFrame(data)
 df_pl = pl.DataFrame(data)
@@ -32,26 +34,26 @@ series_pa = pa.chunked_array([data["a"]])
 
 
 class MockDataFrame:
-    def _change_version(self, _version: Version) -> MockDataFrame:
+    def _change_version(self: Self, _version: Version) -> MockDataFrame:
         return self
 
-    def __narwhals_dataframe__(self) -> Any:
+    def __narwhals_dataframe__(self: Self) -> Any:
         return self
 
 
 class MockLazyFrame:
-    def _change_version(self, _version: Version) -> MockLazyFrame:
+    def _change_version(self: Self, _version: Version) -> MockLazyFrame:
         return self
 
-    def __narwhals_lazyframe__(self) -> Any:
+    def __narwhals_lazyframe__(self: Self) -> Any:
         return self
 
 
 class MockSeries:
-    def _change_version(self, _version: Version) -> MockSeries:
+    def _change_version(self: Self, _version: Version) -> MockSeries:
         return self
 
-    def __narwhals_series__(self) -> Any:
+    def __narwhals_series__(self: Self) -> Any:
         return self
 
 
@@ -202,7 +204,6 @@ def test_init_already_narwhals_unstable() -> None:
 
 def test_series_only_dask() -> None:
     pytest.importorskip("dask")
-    pytest.importorskip("dask_expr", exc_type=ImportError)
     import dask.dataframe as dd
 
     dframe = dd.from_pandas(df_pd)
@@ -221,7 +222,6 @@ def test_series_only_dask() -> None:
 )
 def test_eager_only_lazy_dask(eager_only: Any, context: Any) -> None:
     pytest.importorskip("dask")
-    pytest.importorskip("dask_expr", exc_type=ImportError)
     import dask.dataframe as dd
 
     dframe = dd.from_pandas(df_pd)
@@ -233,6 +233,40 @@ def test_eager_only_lazy_dask(eager_only: Any, context: Any) -> None:
         assert nw.from_native(dframe, eager_only=eager_only, strict=False) is dframe
 
 
+def test_series_only_sqlframe() -> None:  # pragma: no cover
+    pytest.importorskip("sqlframe")
+    from sqlframe.duckdb import DuckDBSession
+
+    session = DuckDBSession()
+    df = (  # type: ignore[no-any-return]
+        session.createDataFrame([*zip(*data.values())], schema=[*data.keys()])
+    )
+
+    with pytest.raises(TypeError, match="Cannot only use `series_only`"):
+        nw.from_native(df, series_only=True)
+
+
+@pytest.mark.parametrize(
+    ("eager_only", "context"),
+    [
+        (False, does_not_raise()),
+        (True, pytest.raises(TypeError, match="Cannot only use `eager_only`")),
+    ],
+)
+def test_eager_only_sqlframe(eager_only: Any, context: Any) -> None:  # pragma: no cover
+    pytest.importorskip("sqlframe")
+    from sqlframe.duckdb import DuckDBSession
+
+    session = DuckDBSession()
+    df = (  # type: ignore[no-any-return]
+        session.createDataFrame([*zip(*data.values())], schema=[*data.keys()])
+    )
+
+    with context:
+        res = nw.from_native(df, eager_only=eager_only)
+        assert isinstance(res, nw.LazyFrame)
+
+
 def test_from_native_strict_false_typing() -> None:
     df = pl.DataFrame()
     nw.from_native(df, strict=False)
@@ -242,7 +276,6 @@ def test_from_native_strict_false_typing() -> None:
     with pytest.deprecated_call(match="please use `pass_through` instead"):
         unstable_nw.from_native(df, strict=False)  # type: ignore[call-overload]
         unstable_nw.from_native(df, strict=False, eager_only=True)  # type: ignore[call-overload]
-        unstable_nw.from_native(df, strict=False, eager_or_interchange_only=True)  # type: ignore[call-overload]
 
 
 def test_from_native_strict_false_invalid() -> None:

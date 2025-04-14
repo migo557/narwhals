@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import TYPE_CHECKING
 from typing import Literal
 
 import numpy as np
@@ -10,10 +11,16 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pytest
+from typing_extensions import reveal_type
 
 import narwhals.stable.v1 as nw
 from tests.utils import PANDAS_VERSION
 from tests.utils import POLARS_VERSION
+from tests.utils import PYARROW_VERSION
+
+if TYPE_CHECKING:
+    from narwhals.typing import IntoSeries
+    from tests.utils import Constructor
 
 
 @pytest.mark.parametrize("time_unit", ["us", "ns", "ms"])
@@ -35,7 +42,7 @@ def test_datetime_valid(
 @pytest.mark.parametrize("time_unit", ["abc"])
 def test_datetime_invalid(time_unit: str) -> None:
     with pytest.raises(ValueError, match="invalid `time_unit`"):
-        nw.Datetime(time_unit=time_unit)  # type: ignore[arg-type]
+        nw.Datetime(time_unit=time_unit)  # type: ignore[call-overload]
 
 
 @pytest.mark.parametrize("time_unit", ["us", "ns", "ms"])
@@ -73,19 +80,21 @@ def test_array_valid() -> None:
     dtype = nw.Array(nw.Int64, 2)
     assert dtype == nw.Array(nw.Int64, 2)
     assert dtype == nw.Array
+    assert dtype != nw.Array(nw.Int64, 3)
     assert dtype != nw.Array(nw.Float32, 2)
     assert dtype != nw.Duration
-    assert repr(dtype) == "Array(<class 'narwhals.dtypes.Int64'>, 2)"
+    assert repr(dtype) == "Array(<class 'narwhals.dtypes.Int64'>, shape=(2,))"
     dtype = nw.Array(nw.Array(nw.Int64, 2), 2)
     assert dtype == nw.Array(nw.Array(nw.Int64, 2), 2)
     assert dtype == nw.Array
     assert dtype != nw.Array(nw.Array(nw.Float32, 2), 2)
     assert dtype in {nw.Array(nw.Array(nw.Int64, 2), 2)}
 
-    with pytest.raises(
-        TypeError, match="`width` must be specified when initializing an `Array`"
-    ):
-        dtype = nw.Array(nw.Int64)
+    with pytest.raises(TypeError, match="invalid input for shape"):
+        nw.Array(nw.Int64(), shape=None)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="invalid input for shape"):
+        nw.Array(nw.Int64(), shape="invalid_type")  # type: ignore[arg-type]
 
 
 def test_struct_valid() -> None:
@@ -125,31 +134,30 @@ def test_struct_hashes() -> None:
     assert len({hash(tp) for tp in (dtypes)}) == 3
 
 
-@pytest.mark.skipif(
-    POLARS_VERSION < (1,) or PANDAS_VERSION < (2, 2),
-    reason="`shape` is only available after 1.0",
-)
-def test_polars_2d_array() -> None:
-    df = pl.DataFrame(
-        {"a": [[[1, 2], [3, 4], [5, 6]]]}, schema={"a": pl.Array(pl.Int64, (3, 2))}
+@pytest.mark.skipif(PANDAS_VERSION < (2, 2), reason="old pandas")
+def test_2d_array(constructor: Constructor, request: pytest.FixtureRequest) -> None:
+    if any(x in str(constructor) for x in ("dask", "modin", "cudf", "pyspark")):
+        request.applymarker(pytest.mark.xfail)
+    if "pyarrow_table" in str(constructor) and PYARROW_VERSION < (14,):
+        request.applymarker(pytest.mark.xfail)
+    data = {"a": [[[1, 2], [3, 4], [5, 6]]]}
+    df = nw.from_native(constructor(data)).with_columns(
+        a=nw.col("a").cast(nw.Array(nw.Int64(), (3, 2)))
     )
-    assert nw.from_native(df).collect_schema()["a"] == nw.Array(nw.Array(nw.Int64, 2), 3)
-    assert nw.from_native(df.to_arrow()).collect_schema()["a"] == nw.Array(
-        nw.Array(nw.Int64, 2), 3
-    )
-    assert nw.from_native(
-        df.to_pandas(use_pyarrow_extension_array=True)
-    ).collect_schema()["a"] == nw.Array(nw.Array(nw.Int64, 2), 3)
+    assert df.collect_schema()["a"] == nw.Array(nw.Int64(), (3, 2))
+    assert df.collect_schema()["a"] == nw.Array(nw.Array(nw.Int64(), 2), 3)
 
 
 def test_second_time_unit() -> None:
-    s = pd.Series(np.array([np.datetime64("2020-01-01", "s")]))
+    s: IntoSeries = pd.Series(np.array([np.datetime64("2020-01-01", "s")]))
     result = nw.from_native(s, series_only=True)
     if PANDAS_VERSION < (2,):  # pragma: no cover
         assert result.dtype == nw.Datetime("ns")
     else:
         assert result.dtype == nw.Datetime("s")
-    s = pa.chunked_array([pa.array([datetime(2020, 1, 1)], type=pa.timestamp("s"))])
+    ts_sec = pa.timestamp("s")
+    dur_sec = pa.duration("s")
+    s = pa.chunked_array([pa.array([datetime(2020, 1, 1)], type=ts_sec)], type=ts_sec)
     result = nw.from_native(s, series_only=True)
     assert result.dtype == nw.Datetime("s")
     s = pd.Series(np.array([np.timedelta64(1, "s")]))
@@ -158,7 +166,7 @@ def test_second_time_unit() -> None:
         assert result.dtype == nw.Duration("ns")
     else:
         assert result.dtype == nw.Duration("s")
-    s = pa.chunked_array([pa.array([timedelta(1)], type=pa.duration("s"))])
+    s = pa.chunked_array([pa.array([timedelta(1)], type=dur_sec)], type=dur_sec)
     result = nw.from_native(s, series_only=True)
     assert result.dtype == nw.Duration("s")
 
@@ -197,3 +205,201 @@ def test_pandas_fixed_offset_1302() -> None:
         assert result == nw.Datetime("ns", "+01:00")
     else:  # pragma: no cover
         pass
+
+
+def test_huge_int() -> None:
+    duckdb = pytest.importorskip("duckdb")
+    df = pl.DataFrame({"a": [1, 2, 3]})
+    if POLARS_VERSION >= (1, 18):  # pragma: no cover
+        result = nw.from_native(df.select(pl.col("a").cast(pl.Int128))).schema
+        assert result["a"] == nw.Int128
+    else:  # pragma: no cover
+        # Int128 was not available yet
+        pass
+    rel = duckdb.sql("""
+        select cast(a as int128) as a
+        from df
+                     """)
+    result = nw.from_native(rel).schema
+    assert result["a"] == nw.Int128
+    rel = duckdb.sql("""
+        select cast(a as uint128) as a
+        from df
+                     """)
+    result = nw.from_native(rel).schema
+    assert result["a"] == nw.UInt128
+
+    # TODO(unassigned): once other libraries support Int128/UInt128,
+    # add tests for them too
+
+
+@pytest.mark.skipif(PANDAS_VERSION < (1, 5), reason="too old for pyarrow")
+def test_decimal() -> None:
+    duckdb = pytest.importorskip("duckdb")
+    df = pl.DataFrame({"a": [1]}, schema={"a": pl.Decimal})
+    result = nw.from_native(df).schema
+    assert result["a"] == nw.Decimal
+    rel = duckdb.sql("""
+        select *
+        from df
+                     """)
+    result = nw.from_native(rel).schema
+    assert result["a"] == nw.Decimal
+    result = nw.from_native(df.to_pandas(use_pyarrow_extension_array=True)).schema
+    assert result["a"] == nw.Decimal
+    result = nw.from_native(df.to_arrow()).schema
+    assert result["a"] == nw.Decimal
+
+
+def test_dtype_is_x() -> None:
+    dtypes = (
+        nw.Array,
+        nw.Boolean,
+        nw.Categorical,
+        nw.Date,
+        nw.Datetime,
+        nw.Decimal,
+        nw.Duration,
+        nw.Enum,
+        nw.Float32,
+        nw.Float64,
+        nw.Int8,
+        nw.Int16,
+        nw.Int32,
+        nw.Int64,
+        nw.Int128,
+        nw.List,
+        nw.Object,
+        nw.String,
+        nw.Struct,
+        nw.UInt8,
+        nw.UInt16,
+        nw.UInt32,
+        nw.UInt64,
+        nw.UInt128,
+        nw.Unknown,
+    )
+
+    is_signed_integer = {nw.Int8, nw.Int16, nw.Int32, nw.Int64, nw.Int128}
+    is_unsigned_integer = {nw.UInt8, nw.UInt16, nw.UInt32, nw.UInt64, nw.UInt128}
+    is_float = {nw.Float32, nw.Float64}
+    is_decimal = {nw.Decimal}
+    is_temporal = {nw.Datetime, nw.Date, nw.Duration}
+    is_nested = {nw.Array, nw.List, nw.Struct}
+
+    for dtype in dtypes:
+        assert dtype.is_numeric() == (
+            dtype
+            in is_signed_integer.union(is_unsigned_integer)
+            .union(is_float)
+            .union(is_decimal)
+        )
+        assert dtype.is_integer() == (
+            dtype in is_signed_integer.union(is_unsigned_integer)
+        )
+        assert dtype.is_signed_integer() == (dtype in is_signed_integer)
+        assert dtype.is_unsigned_integer() == (dtype in is_unsigned_integer)
+        assert dtype.is_float() == (dtype in is_float)
+        assert dtype.is_decimal() == (dtype in is_decimal)
+        assert dtype.is_temporal() == (dtype in is_temporal)
+        assert dtype.is_nested() == (dtype in is_nested)
+
+
+def test_huge_int_to_native() -> None:
+    duckdb = pytest.importorskip("duckdb")
+    df = pl.DataFrame({"a": [1, 2, 3]})
+    if POLARS_VERSION >= (1, 18):  # pragma: no cover
+        df_casted = (
+            nw.from_native(df)
+            .with_columns(a_int=nw.col("a").cast(nw.Int128()))
+            .to_native()
+        )
+        assert df_casted.schema["a_int"] == pl.Int128
+    else:  # pragma: no cover
+        # Int128 was not available yet
+        pass
+    rel = duckdb.sql("""
+        select cast(a as int64) as a
+        from df
+                     """)
+    result = (
+        nw.from_native(rel)
+        .with_columns(
+            a_int=nw.col("a").cast(nw.Int128()), a_unit=nw.col("a").cast(nw.UInt128())
+        )
+        .select("a_int", "a_unit")
+        .to_native()
+    )
+    type_a_int, type_a_unit = result.types
+    assert type_a_int == "HUGEINT"
+    assert type_a_unit == "UHUGEINT"
+
+
+def test_cast_decimal_to_native() -> None:
+    duckdb = pytest.importorskip("duckdb")
+    data = {"a": [1, 2, 3]}
+
+    df = pl.DataFrame(data)
+    library_obj_to_test = [
+        df,
+        duckdb.sql("""
+            select cast(a as INT1) as a
+            from df
+                         """),
+        pd.DataFrame(data),
+        pa.Table.from_arrays(
+            [pa.array(data["a"])], schema=pa.schema([("a", pa.int64())])
+        ),
+    ]
+    for obj in library_obj_to_test:
+        with pytest.raises(
+            NotImplementedError, match="Casting to Decimal is not supported yet."
+        ):
+            (
+                nw.from_native(obj)
+                .with_columns(a=nw.col("a").cast(nw.Decimal()))
+                .to_native()
+            )
+
+
+def test_datetime_generic() -> None:
+    import narwhals as unstable_nw
+
+    dt_1 = unstable_nw.Datetime()
+    dt_21 = unstable_nw.Datetime("ns")
+    dt_22 = unstable_nw.Datetime(time_unit="ns")
+    dt_3 = unstable_nw.Datetime("s", time_zone="zone")
+    dt_4 = unstable_nw.Datetime("ns", timezone.utc)
+    dt_5 = unstable_nw.Datetime(time_zone="Asia/Kathmandu")
+    dt_6 = unstable_nw.Datetime(time_zone=timezone.utc)
+    reveal_type(dt_1)
+    reveal_type(dt_21)
+    reveal_type(dt_22)
+    reveal_type(dt_3)
+    reveal_type(dt_4)
+    reveal_type(dt_5)
+    reveal_type(dt_6)
+    reveal_type(dt_3.time_unit)
+    assert dt_3.time_unit
+
+    # ruff: noqa: F841
+
+    dtype = unstable_nw.Datetime("s")
+    bad = unstable_nw.Datetime("us", "USA")
+
+    matches_2 = dtype == unstable_nw.Datetime
+    matches_1 = dtype == unstable_nw.Datetime("s", None)
+    matches_3 = dtype == bad
+    matches_none = dtype == unstable_nw.Duration
+
+    if dtype == unstable_nw.Duration:
+        what = dtype
+
+    if dtype != unstable_nw.Datetime:
+        what_again = dtype
+
+    # NOTE: These **not** matching is a positive outcome
+    # - Omitting the overload is one way to enforce it
+    # - `Literal[False]` makes sense, but
+    if dtype == bad:
+        what3 = dtype

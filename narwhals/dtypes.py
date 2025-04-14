@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import timezone
+from itertools import starmap
 from typing import TYPE_CHECKING
+from typing import Any
+from typing import Generic
 from typing import Mapping
+from typing import cast
+from typing import overload
 
 from narwhals.utils import isinstance_or_issubclass
 
@@ -13,6 +18,52 @@ if TYPE_CHECKING:
     from typing import Sequence
 
     from typing_extensions import Self
+    from typing_extensions import TypeAlias
+    from typing_extensions import TypeIs
+    from typing_extensions import TypeVar
+
+    from narwhals.typing import TimeUnit
+
+    _DTypeT = TypeVar("_DTypeT", bound="DType")
+    UnitT = TypeVar("UnitT", bound=TimeUnit)
+    _UnitT = TypeVar("_UnitT", bound=TimeUnit)
+    IntoZone: TypeAlias = "str | timezone | None"
+    ZoneT = TypeVar("ZoneT", str, None)
+    _ZoneT = TypeVar("_ZoneT", str, None)
+else:
+    from typing import TypeVar
+
+    UnitT = TypeVar("UnitT", bound="TimeUnit")
+    ZoneT = TypeVar("ZoneT", str, None)
+
+__all__ = [
+    "Array",
+    "Boolean",
+    "Categorical",
+    "Date",
+    "Datetime",
+    "Decimal",
+    "Duration",
+    "Enum",
+    "Field",
+    "Float32",
+    "Float64",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "Int128",
+    "List",
+    "Object",
+    "String",
+    "Struct",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "UInt128",
+    "Unknown",
+]
 
 
 def _validate_dtype(dtype: DType | type[DType]) -> None:
@@ -25,29 +76,95 @@ def _validate_dtype(dtype: DType | type[DType]) -> None:
 
 
 class DType:
-    def __repr__(self) -> str:  # pragma: no cover
+    def __repr__(self: Self) -> str:  # pragma: no cover
         return self.__class__.__qualname__
 
     @classmethod
     def is_numeric(cls: type[Self]) -> bool:
         return issubclass(cls, NumericType)
 
-    def __eq__(self, other: DType | type[DType]) -> bool:  # type: ignore[override]
+    @classmethod
+    def is_integer(cls: type[Self]) -> bool:
+        return issubclass(cls, IntegerType)
+
+    @classmethod
+    def is_signed_integer(cls: type[Self]) -> bool:
+        return issubclass(cls, SignedIntegerType)
+
+    @classmethod
+    def is_unsigned_integer(cls: type[Self]) -> bool:
+        return issubclass(cls, UnsignedIntegerType)
+
+    @classmethod
+    def is_float(cls: type[Self]) -> bool:
+        return issubclass(cls, FloatType)
+
+    @classmethod
+    def is_decimal(cls: type[Self]) -> bool:
+        return issubclass(cls, Decimal)
+
+    @classmethod
+    def is_temporal(cls: type[Self]) -> bool:
+        return issubclass(cls, TemporalType)
+
+    @classmethod
+    def is_nested(cls: type[Self]) -> bool:
+        return issubclass(cls, NestedType)
+
+    def __eq__(self: _DTypeT, other: object) -> TypeIs[_DTypeT | type[_DTypeT]]:  # type: ignore[override]
         from narwhals.utils import isinstance_or_issubclass
 
         return isinstance_or_issubclass(other, type(self))
 
-    def __hash__(self) -> int:
+    def __hash__(self: Self) -> int:
         return hash(self.__class__)
 
 
-class NumericType(DType): ...
+class NumericType(DType):
+    """Base class for numeric data types."""
 
 
-class TemporalType(DType): ...
+class IntegerType(NumericType):
+    """Base class for integer data types."""
 
 
-class Int64(NumericType):
+class SignedIntegerType(IntegerType):
+    """Base class for signed integer data types."""
+
+
+class UnsignedIntegerType(IntegerType):
+    """Base class for unsigned integer data types."""
+
+
+class FloatType(NumericType):
+    """Base class for float data types."""
+
+
+class TemporalType(DType):
+    """Base class for temporal data types."""
+
+
+class NestedType(DType):
+    """Base class for nested data types."""
+
+
+class Decimal(NumericType):
+    """Decimal type.
+
+    Examples:
+        >>> import polars as pl
+        >>> import narwhals as nw
+        >>> s = pl.Series(["1.5"], dtype=pl.Decimal)
+        >>> nw.from_native(s, series_only=True).dtype
+        Decimal
+    """
+
+
+class Int128(SignedIntegerType):
+    """128-bit signed integer type."""
+
+
+class Int64(SignedIntegerType):
     """64-bit signed integer type.
 
     Examples:
@@ -69,7 +186,7 @@ class Int64(NumericType):
     """
 
 
-class Int32(NumericType):
+class Int32(SignedIntegerType):
     """32-bit signed integer type.
 
     Examples:
@@ -95,7 +212,7 @@ class Int32(NumericType):
     """
 
 
-class Int16(NumericType):
+class Int16(SignedIntegerType):
     """16-bit signed integer type.
 
     Examples:
@@ -121,7 +238,7 @@ class Int16(NumericType):
     """
 
 
-class Int8(NumericType):
+class Int8(SignedIntegerType):
     """8-bit signed integer type.
 
     Examples:
@@ -147,7 +264,11 @@ class Int8(NumericType):
     """
 
 
-class UInt64(NumericType):
+class UInt128(UnsignedIntegerType):
+    """128-bit unsigned integer type."""
+
+
+class UInt64(UnsignedIntegerType):
     """64-bit unsigned integer type.
 
     Examples:
@@ -173,7 +294,7 @@ class UInt64(NumericType):
     """
 
 
-class UInt32(NumericType):
+class UInt32(UnsignedIntegerType):
     """32-bit unsigned integer type.
 
     Examples:
@@ -199,7 +320,7 @@ class UInt32(NumericType):
     """
 
 
-class UInt16(NumericType):
+class UInt16(UnsignedIntegerType):
     """16-bit unsigned integer type.
 
     Examples:
@@ -225,7 +346,7 @@ class UInt16(NumericType):
     """
 
 
-class UInt8(NumericType):
+class UInt8(UnsignedIntegerType):
     """8-bit unsigned integer type.
 
     Examples:
@@ -251,7 +372,7 @@ class UInt8(NumericType):
     """
 
 
-class Float64(NumericType):
+class Float64(FloatType):
     """64-bit floating point type.
 
     Examples:
@@ -273,7 +394,7 @@ class Float64(NumericType):
     """
 
 
-class Float32(NumericType):
+class Float32(FloatType):
     """32-bit floating point type.
 
     Examples:
@@ -376,7 +497,17 @@ class Unknown(DType):
     """
 
 
-class Datetime(TemporalType):
+class _DatetimeMeta(type):
+    @property
+    def time_unit(cls) -> TimeUnit:
+        return "us"
+
+    @property
+    def time_zone(cls) -> str | None:
+        return None
+
+
+class Datetime(TemporalType, Generic[UnitT, ZoneT], metaclass=_DatetimeMeta):
     """Data type representing a calendar date and time of day.
 
     Arguments:
@@ -386,12 +517,80 @@ class Datetime(TemporalType):
 
     Notes:
         Adapted from [Polars implementation](https://github.com/pola-rs/polars/blob/py-1.7.1/py-polars/polars/datatypes/classes.py#L398-L457)
+
+    Examples:
+        >>> import pandas as pd
+        >>> import polars as pl
+        >>> import pyarrow as pa
+        >>> import pyarrow.compute as pc
+        >>> import narwhals as nw
+        >>> from datetime import datetime, timedelta
+        >>> data = [datetime(2024, 12, 9) + timedelta(days=n) for n in range(5)]
+        >>> ser_pd = (
+        ...     pd.Series(data)
+        ...     .dt.tz_localize("Africa/Accra")
+        ...     .astype("datetime64[ms, Africa/Accra]")
+        ... )
+        >>> ser_pl = (
+        ...     pl.Series(data)
+        ...     .cast(pl.Datetime("ms"))
+        ...     .dt.replace_time_zone("Africa/Accra")
+        ... )
+        >>> ser_pa = pc.assume_timezone(
+        ...     pa.chunked_array([data], type=pa.timestamp("ms")), "Africa/Accra"
+        ... )
+
+        >>> nw.from_native(ser_pd, series_only=True).dtype
+        Datetime(time_unit='ms', time_zone='Africa/Accra')
+        >>> nw.from_native(ser_pl, series_only=True).dtype
+        Datetime(time_unit='ms', time_zone='Africa/Accra')
+        >>> nw.from_native(ser_pa, series_only=True).dtype
+        Datetime(time_unit='ms', time_zone='Africa/Accra')
     """
 
+    time_unit: UnitT
+    time_zone: ZoneT
+
+    @overload
     def __init__(
-        self: Self,
-        time_unit: Literal["us", "ns", "ms", "s"] = "us",
-        time_zone: str | timezone | None = None,
+        self: Datetime[Literal["us"], None],
+        time_unit: Literal["us"] = ...,
+        time_zone: None = ...,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Datetime[_UnitT, None], time_unit: _UnitT, time_zone: None = ...
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Datetime[_UnitT, _ZoneT], time_unit: _UnitT, time_zone: _ZoneT
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Datetime[_UnitT, str], time_unit: _UnitT, time_zone: timezone
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Datetime[Literal["us"], _ZoneT],
+        time_unit: Literal["us"] = ...,
+        *,
+        time_zone: _ZoneT,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Datetime[Literal["us"], str],
+        time_unit: Literal["us"] = ...,
+        *,
+        time_zone: timezone,
+    ) -> None: ...
+
+    def __init__(
+        self: Self, time_unit: TimeUnit | Literal["us"] = "us", time_zone: IntoZone = None
     ) -> None:
         if time_unit not in {"s", "ms", "us", "ns"}:
             msg = (
@@ -400,15 +599,28 @@ class Datetime(TemporalType):
             )
             raise ValueError(msg)
 
-        if isinstance(time_zone, timezone):
-            time_zone = str(time_zone)
+        zone = str(time_zone) if isinstance(time_zone, timezone) else time_zone
+        self.time_unit = cast("UnitT", time_unit)
+        self.time_zone = cast("ZoneT", zone)
 
-        self.time_unit = time_unit
-        self.time_zone = time_zone
+    @overload  # type: ignore[override]
+    def __eq__(
+        self: Datetime[UnitT, ZoneT], other: Datetime[UnitT, ZoneT]
+    ) -> TypeIs[Datetime[UnitT, ZoneT]]: ...
 
-    def __eq__(self: Self, other: object) -> bool:
+    @overload
+    def __eq__(  # type: ignore[override]
+        self: Self, other: type[Datetime[Any, Any]]
+    ) -> TypeIs[type[Datetime[Any, Any]]]: ...
+
+    @overload
+    def __eq__(self: Self, other: Datetime) -> TypeIs[Datetime]: ...
+
+    def __eq__(  # type: ignore[override]
+        self: Datetime[UnitT, ZoneT], other: object
+    ) -> TypeIs[Datetime[UnitT, ZoneT] | type[Datetime[Any, Any]] | Datetime]:
         # allow comparing object instances to class
-        if type(other) is type and issubclass(other, self.__class__):
+        if type(other) is _DatetimeMeta:
             return True
         elif isinstance(other, self.__class__):
             return self.time_unit == other.time_unit and self.time_zone == other.time_zone
@@ -423,7 +635,13 @@ class Datetime(TemporalType):
         return f"{class_name}(time_unit={self.time_unit!r}, time_zone={self.time_zone!r})"
 
 
-class Duration(TemporalType):
+class _DurationMeta(type):
+    @property
+    def time_unit(cls) -> TimeUnit:
+        return "us"
+
+
+class Duration(TemporalType, metaclass=_DurationMeta):
     """Data type representing a time duration.
 
     Arguments:
@@ -451,10 +669,7 @@ class Duration(TemporalType):
         Duration(time_unit='ms')
     """
 
-    def __init__(
-        self: Self,
-        time_unit: Literal["us", "ns", "ms", "s"] = "us",
-    ) -> None:
+    def __init__(self: Self, time_unit: TimeUnit = "us") -> None:
         if time_unit not in ("s", "ms", "us", "ns"):
             msg = (
                 "invalid `time_unit`"
@@ -462,11 +677,12 @@ class Duration(TemporalType):
             )
             raise ValueError(msg)
 
-        self.time_unit = time_unit
+        self.time_unit: TimeUnit = time_unit
 
-    def __eq__(self: Self, other: object) -> bool:
+    # TODO @dangotbanned: convert to `TypeIs`
+    def __eq__(self: Self, other: object) -> bool:  # type: ignore[override]
         # allow comparing object instances to class
-        if type(other) is type and issubclass(other, self.__class__):
+        if type(other) is _DurationMeta:
             return True
         elif isinstance(other, self.__class__):
             return self.time_unit == other.time_unit
@@ -530,22 +746,22 @@ class Field:
     name: str
     dtype: type[DType] | DType
 
-    def __init__(self, name: str, dtype: type[DType] | DType) -> None:
+    def __init__(self: Self, name: str, dtype: type[DType] | DType) -> None:
         self.name = name
         self.dtype = dtype
 
-    def __eq__(self, other: Field) -> bool:  # type: ignore[override]
+    def __eq__(self: Self, other: Field) -> bool:  # type: ignore[override]
         return (self.name == other.name) & (self.dtype == other.dtype)
 
-    def __hash__(self) -> int:
+    def __hash__(self: Self) -> int:
         return hash((self.name, self.dtype))
 
-    def __repr__(self) -> str:
+    def __repr__(self: Self) -> str:
         class_name = self.__class__.__name__
         return f"{class_name}({self.name!r}, {self.dtype})"
 
 
-class Struct(DType):
+class Struct(NestedType):
     """Struct composite type.
 
     Arguments:
@@ -569,14 +785,14 @@ class Struct(DType):
     fields: list[Field]
 
     def __init__(
-        self, fields: Sequence[Field] | Mapping[str, DType | type[DType]]
+        self: Self, fields: Sequence[Field] | Mapping[str, DType | type[DType]]
     ) -> None:
         if isinstance(fields, Mapping):
-            self.fields = [Field(name, dtype) for name, dtype in fields.items()]
+            self.fields = list(starmap(Field, fields.items()))
         else:
             self.fields = list(fields)
 
-    def __eq__(self, other: DType | type[DType]) -> bool:  # type: ignore[override]
+    def __eq__(self: Self, other: DType | type[DType]) -> bool:  # type: ignore[override]
         # The comparison allows comparing objects to classes, and specific
         # inner types to those without (eg: inner=None). if one of the
         # arguments is not specific about its inner type we infer it
@@ -588,22 +804,22 @@ class Struct(DType):
         else:
             return False
 
-    def __hash__(self) -> int:
+    def __hash__(self: Self) -> int:
         return hash((self.__class__, tuple(self.fields)))
 
-    def __iter__(self) -> Iterator[tuple[str, DType | type[DType]]]:
+    def __iter__(self: Self) -> Iterator[tuple[str, DType | type[DType]]]:
         for fld in self.fields:
             yield fld.name, fld.dtype
 
-    def __reversed__(self) -> Iterator[tuple[str, DType | type[DType]]]:
+    def __reversed__(self: Self) -> Iterator[tuple[str, DType | type[DType]]]:
         for fld in reversed(self.fields):
             yield fld.name, fld.dtype
 
-    def __repr__(self) -> str:
+    def __repr__(self: Self) -> str:
         class_name = self.__class__.__name__
         return f"{class_name}({dict(self)})"
 
-    def to_schema(self) -> OrderedDict[str, DType | type[DType]]:
+    def to_schema(self: Self) -> OrderedDict[str, DType | type[DType]]:
         """Return Struct dtype as a schema dict.
 
         Returns:
@@ -612,7 +828,7 @@ class Struct(DType):
         return OrderedDict(self)
 
 
-class List(DType):
+class List(NestedType):
     """Variable length list type.
 
     Examples:
@@ -633,10 +849,12 @@ class List(DType):
        List(String)
     """
 
-    def __init__(self, inner: DType | type[DType]) -> None:
+    inner: DType | type[DType]
+
+    def __init__(self: Self, inner: DType | type[DType]) -> None:
         self.inner = inner
 
-    def __eq__(self, other: DType | type[DType]) -> bool:  # type: ignore[override]
+    def __eq__(self: Self, other: DType | type[DType]) -> bool:  # type: ignore[override]
         # This equality check allows comparison of type classes and type instances.
         # If a parent type is not specific about its inner type, we infer it as equal:
         # > list[i64] == list[i64] -> True
@@ -651,30 +869,65 @@ class List(DType):
         else:
             return False
 
-    def __hash__(self) -> int:
+    def __hash__(self: Self) -> int:
         return hash((self.__class__, self.inner))
 
-    def __repr__(self) -> str:
+    def __repr__(self: Self) -> str:
         class_name = self.__class__.__name__
         return f"{class_name}({self.inner!r})"
 
 
-class Array(DType):
+class Array(NestedType):
     """Fixed length list type.
 
     Arguments:
         inner: The datatype of the values within each array.
-        width: the length of each array.
+        shape: The shape of the arrays.
+
+    Examples:
+        >>> import pandas as pd
+        >>> import polars as pl
+        >>> import pyarrow as pa
+        >>> import narwhals as nw
+        >>> data = [[1, 2], [3, 4], [5, 6]]
+        >>> ser_pd = pd.Series(data, dtype=pd.ArrowDtype(pa.list_(pa.int32(), 2)))
+        >>> ser_pl = pl.Series(data, dtype=pl.Array(pl.Int32, 2))
+        >>> ser_pa = pa.chunked_array([data], type=pa.list_(pa.int32(), 2))
+
+        >>> nw.from_native(ser_pd, series_only=True).dtype
+        Array(Int32, shape=(2,))
+        >>> nw.from_native(ser_pl, series_only=True).dtype
+        Array(Int32, shape=(2,))
+        >>> nw.from_native(ser_pa, series_only=True).dtype
+        Array(Int32, shape=(2,))
     """
 
-    def __init__(self, inner: DType | type[DType], width: int | None = None) -> None:
-        self.inner = inner
-        if width is None:
-            error = "`width` must be specified when initializing an `Array`"
-            raise TypeError(error)
-        self.width = width
+    inner: DType | type[DType]
+    size: int
+    shape: tuple[int, ...]
 
-    def __eq__(self, other: DType | type[DType]) -> bool:  # type: ignore[override]
+    def __init__(
+        self: Self, inner: DType | type[DType], shape: int | tuple[int, ...]
+    ) -> None:
+        inner_shape: tuple[int, ...] = inner.shape if isinstance(inner, Array) else ()
+        if isinstance(shape, int):
+            self.inner = inner
+            self.size = shape
+            self.shape = (shape, *inner_shape)
+
+        elif isinstance(shape, tuple) and len(shape) != 0 and isinstance(shape[0], int):
+            if len(shape) > 1:
+                inner = Array(inner, shape[1:])
+
+            self.inner = inner
+            self.size = shape[0]
+            self.shape = shape + inner_shape
+
+        else:
+            msg = f"invalid input for shape: {shape!r}"
+            raise TypeError(msg)
+
+    def __eq__(self: Self, other: DType | type[DType]) -> bool:  # type: ignore[override]
         # This equality check allows comparison of type classes and type instances.
         # If a parent type is not specific about its inner type, we infer it as equal:
         # > array[i64] == array[i64] -> True
@@ -685,17 +938,44 @@ class Array(DType):
         if type(other) is type and issubclass(other, self.__class__):
             return True
         elif isinstance(other, self.__class__):
-            return self.inner == other.inner
+            if self.shape != other.shape:
+                return False
+            else:
+                return self.inner == other.inner
         else:
             return False
 
-    def __hash__(self) -> int:
-        return hash((self.__class__, self.inner, self.width))
+    def __hash__(self: Self) -> int:
+        return hash((self.__class__, self.inner, self.shape))
 
     def __repr__(self) -> str:
+        # Get leaf type
+        dtype_ = self
+        for _ in self.shape:
+            dtype_ = dtype_.inner  # type: ignore[assignment]
+
         class_name = self.__class__.__name__
-        return f"{class_name}({self.inner!r}, {self.width})"
+        return f"{class_name}({dtype_!r}, shape={self.shape})"
 
 
 class Date(TemporalType):
-    """Data type representing a calendar date."""
+    """Data type representing a calendar date.
+
+    Examples:
+       >>> import pandas as pd
+       >>> import polars as pl
+       >>> import pyarrow as pa
+       >>> import narwhals as nw
+       >>> from datetime import date, timedelta
+       >>> data = [date(2024, 12, 1) + timedelta(days=d) for d in range(4)]
+       >>> ser_pd = pd.Series(data, dtype="date32[pyarrow]")
+       >>> ser_pl = pl.Series(data)
+       >>> ser_pa = pa.chunked_array([data])
+
+       >>> nw.from_native(ser_pd, series_only=True).dtype
+       Date
+       >>> nw.from_native(ser_pl, series_only=True).dtype
+       Date
+       >>> nw.from_native(ser_pa, series_only=True).dtype
+       Date
+    """

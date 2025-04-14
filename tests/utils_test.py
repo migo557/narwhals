@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import re
 import string
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
 
 import hypothesis.strategies as st
 import pandas as pd
@@ -13,12 +17,21 @@ from pandas.testing import assert_index_equal
 from pandas.testing import assert_series_equal
 
 import narwhals.stable.v1 as nw
+from narwhals.exceptions import ColumnNotFoundError
+from narwhals.utils import check_column_exists
+from narwhals.utils import parse_version
 from tests.utils import PANDAS_VERSION
 from tests.utils import get_module_version_as_tuple
 
 if TYPE_CHECKING:
     from narwhals.series import Series
-    from narwhals.typing import IntoSeriesT
+    from narwhals.typing import IntoSeries
+    from narwhals.utils import _SupportsVersion
+
+
+@dataclass
+class DummyModule:
+    __version__: str
 
 
 def test_maybe_align_index_pandas() -> None:
@@ -112,17 +125,17 @@ def test_maybe_set_index_polars_column_names(
     ],
 )
 def test_maybe_set_index_pandas_direct_index(
-    narwhals_index: Series[IntoSeriesT] | list[Series[IntoSeriesT]] | None,
-    pandas_index: pd.Series | list[pd.Series] | None,
+    narwhals_index: Series[IntoSeries] | list[Series[IntoSeries]],
+    pandas_index: pd.Series | list[pd.Series],
     native_df_or_series: pd.DataFrame | pd.Series,
 ) -> None:
     df = nw.from_native(native_df_or_series, allow_series=True)
     result = nw.maybe_set_index(df, index=narwhals_index)
     if isinstance(native_df_or_series, pd.Series):
-        native_df_or_series.index = pandas_index
+        native_df_or_series.index = pandas_index  # type: ignore[assignment]
         assert_series_equal(nw.to_native(result), native_df_or_series)
     else:
-        expected = native_df_or_series.set_index(pandas_index)
+        expected = native_df_or_series.set_index(pandas_index)  # type: ignore[type-var]
         assert_frame_equal(nw.to_native(result), expected)
 
 
@@ -137,7 +150,7 @@ def test_maybe_set_index_pandas_direct_index(
     ],
 )
 def test_maybe_set_index_polars_direct_index(
-    index: Series[IntoSeriesT] | list[Series[IntoSeriesT]] | None,
+    index: Series[IntoSeries] | list[Series[IntoSeries]] | None,
 ) -> None:
     df = nw.from_native(pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]}))
     result = nw.maybe_set_index(df, index=index)
@@ -168,10 +181,13 @@ def test_maybe_set_index_pandas_either_index_or_column_names() -> None:
 
 def test_maybe_get_index_pandas() -> None:
     pandas_df = pd.DataFrame({"a": [1, 2, 3]}, index=[1, 2, 0])
-    result = nw.maybe_get_index(nw.from_native(pandas_df))
+    result = cast("pd.Index[Any]", nw.maybe_get_index(nw.from_native(pandas_df)))
     assert_index_equal(result, pandas_df.index)
     pandas_series = pd.Series([1, 2, 3], index=[1, 2, 0])
-    result_s = nw.maybe_get_index(nw.from_native(pandas_series, series_only=True))
+    result_s = cast(
+        "pd.Index[Any]",
+        nw.maybe_get_index(nw.from_native(pandas_series, series_only=True)),
+    )
     assert_index_equal(result_s, pandas_series.index)
 
 
@@ -246,7 +262,8 @@ def test_get_trivial_version_with_uninstalled_module() -> None:
     assert result == (0, 0, 0)
 
 
-@given(n_bytes=st.integers(1, 100))  # type: ignore[misc]
+@given(n_bytes=st.integers(1, 100))
+@pytest.mark.slow
 def test_generate_temporary_column_name(n_bytes: int) -> None:
     columns = ["abc", "XYZ"]
 
@@ -270,3 +287,28 @@ def test_generate_temporary_column_name_raise() -> None:
         match="Internal Error: Narwhals was not able to generate a column name with ",
     ):
         nw.generate_temporary_column_name(n_bytes=1, columns=columns)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("2020.1.2", (2020, 1, 2)),
+        ("2020.1.2-dev123", (2020, 1, 2)),
+        ("3.0.0.dev0+618.gb552dc95c9", (3, 0, 0)),
+        (DummyModule("2020.1.2-dev123"), (2020, 1, 2)),
+    ],
+)
+def test_parse_version(
+    version: str | _SupportsVersion, expected: tuple[int, ...]
+) -> None:
+    assert parse_version(version) == expected
+
+
+def test_check_column_exists() -> None:
+    columns = ["a", "b", "c"]
+    subset = ["d", "f"]
+    with pytest.raises(
+        ColumnNotFoundError,
+        match=re.escape("Column(s) ['d', 'f'] not found in ['a', 'b', 'c']"),
+    ):
+        check_column_exists(columns, subset)
